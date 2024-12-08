@@ -36,7 +36,7 @@ def clean_openweather_data(file_path: str) -> bool:
     return True
 
 def clean_openweather_data_summary(file_path):
-    columns = ["date", "precipitation", "max_temp", "min_temp"]
+    columns = ["date", "precipitation", "max_temp", "min_temp", "temperature", "pressure", "humidity"]
     with open("data/openweather/weather_data_summary.csv", "w") as file:
         file.write(",".join(columns) + "\n")
     with open(file_path, "r") as file:
@@ -44,11 +44,13 @@ def clean_openweather_data_summary(file_path):
             data = eval(line)
             date = data["date"]
             precipitation = list(data.get("precipitation", 0).values())[0] # check weather_data_summary.jsonl format
+            humidity = data.get("humidity",0)['afternoon']
             temperature = data.get("temperature", 0) # check weather_data_summary.jsonl format
+            pressure = data.get("pressure", 0)['afternoon'] # check weather_data_summary.
             max_temp = temperature["max"]
             min_temp = temperature["min"]
             with open("data/openweather/weather_data_summary.csv", "a") as file2:
-                file2.write(f"{date},{precipitation},{max_temp},{min_temp}\n")
+                file2.write(f"{date},{precipitation},{max_temp},{min_temp},{temperature['afternoon']},{pressure},{humidity}\n")
     print("Cleaned weather data summary saved to 'data/openweather/weather_data_summary.csv'")
     return True
 
