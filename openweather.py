@@ -32,7 +32,7 @@ def get_weather_data(unix_time, lat="10.72015", long="122.562106"):
     return data
 
 
-def weather_to_jsonl(unix_time):
+def weather_to_csv(unix_time):
     """
     Converts the weather data retrieved from the OpenWeatherMap API into a JSONL format and saves it to a file.
 
