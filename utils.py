@@ -3,6 +3,9 @@ from logging import raiseExceptions
 
 from dotenv import load_dotenv
 import os
+
+
+
 def convert_single_to_double_quotes(file_path):
     """
     This function reads a JSON Lines file with single-quoted strings,
@@ -84,32 +87,73 @@ def municipal_coordinates(file_name, municipals, column_names, rewrite_file=Fals
 
     return coordinates
 
-def get_weather_data(date, lat, long):
-    """
-    Retrieves historical weather data from the OpenWeatherMap API.
+def get_weather_data(start_date,end_date, lat, long):
+   import openmeteo_requests
+   import requests_cache
+   import pandas as pd
+   from retry_requests import retry
 
-    Args:
-        time (int): The date and time in Unix time format for which to retrieve weather data.
-        lat (str): The latitude of the location for which to retrieve weather data.
-        long (str): The longitude of the location for which to retrieve weather data.
+   # Setup the Open-Meteo API client with cache and retry on error
+   cache_session = requests_cache.CachedSession('.cache', expire_after=-1)
+   retry_session = retry(cache_session, retries=5, backoff_factor=0.2)
+   openmeteo = openmeteo_requests.Client(session=retry_session)
 
-    Returns: dict: The JSON response from the OpenWeatherMap API containing the historical weather data.
-    """
-    import requests
-    import os
-    load_dotenv()
-    API_KEY = os.getenv("OPENWEATHER_API_KEY")
-    url = f"https://api.openweathermap.org/data/3.0/onecall/day_summary?lat={lat}&lon={long}&date={date}&appid={API_KEY}"
-    response = requests.get(url).json()
-    if 'cod' in response.keys():
-        raise Exception(f"Error: {response['message']}")
-    data = response['data'][0]
-    return data
+   # Make sure all required weather variables are listed here
+   # The order of variables in hourly or daily is important to assign them correctly below
+   url = "https://archive-api.open-meteo.com/v1/archive"
+   params = {
+       "latitude": lat,
+       "longitude": long,
+       "start_date": start_date,
+       "end_date": end_date,
+       "hourly": ["temperature_2m", "relative_humidity_2m"],
+       "daily": "precipitation_sum"
+   }
+   responses = openmeteo.weather_api(url, params=params)
+
+   # Process first location. Add a for-loop for multiple locations or weather models
+   response = responses[0]
+   print(f"Coordinates {response.Latitude()}°N {response.Longitude()}°E")
+   print(f"Elevation {response.Elevation()} m asl")
+   print(f"Timezone {response.Timezone()} {response.TimezoneAbbreviation()}")
+   print(f"Timezone difference to GMT+0 {response.UtcOffsetSeconds()} s")
+
+   # Process hourly data. The order of variables needs to be the same as requested.
+   hourly = response.Hourly()
+   hourly_temperature_2m = hourly.Variables(0).ValuesAsNumpy()
+   hourly_relative_humidity_2m = hourly.Variables(1).ValuesAsNumpy()
+
+   hourly_data = {"date": pd.date_range(
+       start=pd.to_datetime(hourly.Time(), unit="s", utc=True),
+       end=pd.to_datetime(hourly.TimeEnd(), unit="s", utc=True),
+       freq=pd.Timedelta(seconds=hourly.Interval()),
+       inclusive="left"
+   )}
+
+   hourly_data["temperature_2m"] = hourly_temperature_2m
+   hourly_data["relative_humidity_2m"] = hourly_relative_humidity_2m
+
+   hourly_dataframe = pd.DataFrame(data=hourly_data)
+
+   # Process daily data. The order of variables needs to be the same as requested.
+   daily = response.Daily()
+   daily_precipitation_sum = daily.Variables(0).ValuesAsNumpy()
+
+   daily_data = {"date": pd.date_range(
+       start=pd.to_datetime(daily.Time(), unit="s", utc=True),
+       end=pd.to_datetime(daily.TimeEnd(), unit="s", utc=True),
+       freq=pd.Timedelta(seconds=daily.Interval()),
+       inclusive="left"
+   )}
+
+   daily_data["precipitation_sum"] = daily_precipitation_sum
+
+   daily_dataframe = pd.DataFrame(data=daily_data)
+
+   return hourly_dataframe, daily_dataframe
 
 
-
-
-def weather_to_jsonl(municipal_dict, file_name, rewrite_file=False):
+def weather_to_jsonl(municipal_dict, file_name, start_date="2014-01-01", end_date="2024-12-31", date_hourly=3, rewrite_file=False):
     """
     This function retrieves historical weather data from the OpenWeatherMap API for a list of municipalities,
     converts the data into a JSONL format, and saves it to a file.
@@ -117,6 +161,9 @@ def weather_to_jsonl(municipal_dict, file_name, rewrite_file=False):
     Parameters:
     municipal_dict (dict): A dictionary containing the municipalities and their coordinates.
     file_name (str): The name of the file to save the JSONL data.
+    start_date (str): The start date for which to retrieve weather data. Default is January 1, 2014.
+    end_date (str): The end date for which to retrieve weather data. Default is December 31, 2024.
+    date_hourly (int): The th hour of the day to get the weather data. Default is 3 am.
     rewrite_file (bool): Whether to overwrite the file if it already exists. False to append to the file.
 
     Returns:
@@ -125,50 +172,106 @@ def weather_to_jsonl(municipal_dict, file_name, rewrite_file=False):
     import datetime
     import json
     import os
-    # Define start and end timestamps
-    start_timestamp = 1388534400  # January 1, 2014
-    end_timestamp = 1706659200  # January 31, 2024
 
     # If rewrite_file is True, remove existing file and create a new empty file
     if rewrite_file and os.path.exists(file_name):
         os.remove(file_name)
 
-    # Track last processed municipality and timestamp
-    last_processed_municipal = None
-    last_processed_timestamp = start_timestamp
 
-    # Check the last recorded entry in the file (if it exists)
-    if os.path.exists(file_name) and os.path.getsize(file_name) > 0:
+    # Loop through the municipalities
+    for municipality, (lat, lng) in municipal_dict.items():
+        # check if municipality already exists in the file
+        if os.path.exists(file_name):
+            with open(file_name, "r") as file:
+                lines = file.readlines()
+                if any(municipality in line for line in lines):
+                    print(f"{municipality} already exists in the file. Skipping...")
+                    continue
+        # Get the weather data for the municipality
+        hourly_dataframe, daily_dataframe = get_weather_data(start_date, end_date, lat, lng)
+        # Filter the data to get the weather at the specified hour
+        hourly_data = hourly_dataframe[hourly_dataframe["date"].dt.hour == date_hourly]
+        # convert the date of hourly_data and daily_dataframe to YYYY-MM-DD format
+        hourly_data["date"] = hourly_data["date"].dt.strftime("%Y-%m-%d")
+        daily_dataframe["date"] = daily_dataframe["date"].dt.strftime("%Y-%m-%d")
+        # Add a new column to indicate the municipality
+        hourly_data["municipality"] = municipality
+        # Combine the hourly and daily data
+        weather_data = hourly_data.merge(daily_dataframe, on="date", how="left")
+        # Convert the weather data to JSON
+        weather_json = weather_data.to_json(orient="records", lines=True)
+        # Write the JSON data to the file
+        with open(file_name, "a") as file:
+            file.write(weather_json + "\n")
+
+
+import os
+import json
+import datetime
+import requests
+import pytz
+from dotenv import load_dotenv
+
+
+def get_air_pollution_data(start_date, end_date, lat, lng):
+    """
+    Fetch historical air pollution data from OpenWeatherMap API.
+    """
+    load_dotenv()
+    API_KEY = os.getenv("OPENWEATHER_API_KEY")
+
+    url = (f"https://api.openweathermap.org/data/2.5/air_pollution/history?lat={lat}&lon={lng}"
+           f"&start={start_date}&end={end_date}&appid={API_KEY}")
+    response = requests.get(url).json()
+
+    if 'cod' in response:
+        raise Exception(f"Error: {response.get('message', 'Unknown error')}")
+    print(response)
+    return response.get('data', [])  # Returns list of pollution data
+
+
+def air_pollution_to_jsonl(municipal_dict, file_name, rewrite_file=False):
+    """
+    Retrieve historical air pollution data for multiple municipalities and save to a JSONL file.
+    """
+    manila_tz = pytz.timezone("Asia/Manila")
+    start_dt = manila_tz.localize(datetime.datetime(2021, 1, 1, 0, 0, 0))
+    end_dt = manila_tz.localize(datetime.datetime(2024, 12, 31, 23, 59, 59))
+    start_timestamp = int(start_dt.timestamp())
+    end_timestamp = int(end_dt.timestamp())
+
+    existing_data = {}
+    if os.path.exists(file_name) and not rewrite_file:
         with open(file_name, "r") as file:
-            lines = file.readlines()
-            if lines:
+            for line in file:
                 try:
-                    last_entry = json.loads(lines[-1])  # Load the last JSONL entry
-                    last_processed_municipal = last_entry.get("municipal", None)
-                    last_processed_timestamp = last_entry.get("date", start_timestamp)
+                    json_data = json.loads(line)
+                    municipality = json_data["municipality"]
+                    timestamp = json_data["timestamp"]
+                    existing_data[municipality] = max(existing_data.get(municipality, start_timestamp), timestamp)
                 except json.JSONDecodeError:
-                    print("Error reading last line of the file. Starting fresh.")
+                    continue
 
-    # Iterate through the municipalities
-    for municipal, (lat, lon) in municipal_dict.items():
-        # If the last municipality was the same and we already reached the end date, skip
-        if last_processed_municipal == municipal and last_processed_timestamp >= end_timestamp:
-            continue
+    with open(file_name, "w" if rewrite_file else "a") as file:
+        for municipality, (lat, lng) in municipal_dict.items():
+            last_timestamp = existing_data.get(municipality, start_timestamp)
 
-        # If continuing from a partially processed municipality, adjust start timestamp
-        start_time = last_processed_timestamp if last_processed_municipal == municipal else start_timestamp
+            if last_timestamp >= end_timestamp:
+                print(f"Skipping {municipality}, already up to date.")
+                continue
 
-        for timestamp in range(start_time, end_timestamp, 86400):  # Increment by 1 day (86400 seconds)
-            date_str = datetime.datetime.utcfromtimestamp(timestamp).strftime('%Y-%m-%d')
+            for i in range(last_timestamp, end_timestamp, 86400):
+                pollution_data = get_air_pollution_data(i, i + 86399, lat, lng)
+                print(pollution_data)
+                for entry in pollution_data:
+                    json_record = {
+                        "municipality": municipality,
+                        "lat": lat,
+                        "lng": lng,
+                        "timestamp": entry.get("dt"),
+                        "components": entry.get("components", {}),
+                    }
+                    file.write(json.dumps(json_record) + "\n")
+                    print(f"Data saved for {municipality} on {datetime.datetime.utcfromtimestamp(json_record['timestamp'])}")
+    print("Data saved to", file_name)
 
-            # Fetch weather data (assuming get_weather_data function exists)
-            weather_data = get_weather_data(date_str, lat, lon)
-            weather_data['municipal'] = municipal
-            weather_data['date'] = timestamp  # Store timestamp in the data
-
-            # Append to file in JSONL format
-            with open(file_name, "a") as file:
-                file.write(json.dumps(weather_data) + "\n")
-
-        # Reset last processed timestamp for the next municipality
-        last_processed_timestamp = start_timestamp
