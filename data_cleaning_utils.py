@@ -15,6 +15,15 @@ def get_merged_df(municipal_name):
     df_merged.dropna(inplace=True)
     # create a dataframe with weekly aggregation
     df_merged_weekly = df_merged.groupby(['Year-Week']).agg({'Temperature': 'mean', 'Humidity': 'mean', 'Precipitation': 'sum', 'Cases': 'mean'}).reset_index()
+    # merge the weekly data with
+    df_population = clean_population_data(municipal_name)
+    df_merged_weekly = pd.merge_asof(df_merged_weekly.sort_values('Year-Week'), df_population.sort_values('Year'), on='Year-Week')
+    # Add Year column
+    df_merged_weekly['Year'] = df_merged_weekly['Year-Week'].dt.year
+    # Add Month column
+    df_merged_weekly['Month'] = df_merged_weekly['Year-Week'].dt.month
+    # Add Week column
+    df_merged_weekly['Week'] = df_merged_weekly['Year-Week'].dt.isocalendar().week
     # save the merged dataframe to a csv file
     df_merged_weekly.to_csv(f'data/Merged Data/{municipal_name}_merged.csv', index=False)
     print(f"Data for {municipal_name} has been cleaned and saved to data/Merged Data/{municipal_name}_merged.csv")
@@ -33,3 +42,20 @@ def clean_weather_data(municipal_name):
     weather_df = weather_df[weather_df["municipality"] == municipal_name]
 
     return weather_df
+
+def clean_population_data(municipal_name):
+    # Read the population data
+    df_population = pd.read_csv('population_data_complete.csv')
+    # Filter the population data to the municipality only
+    df_population = df_population[df_population["Municipal"] == municipal_name]
+    years = [2014,2015,2016,2017,2018,2019,2020,2021,2022,2023,2014]
+    population = []
+    for year in years:
+        # Get the population for the year
+        population.append(df_population[str(year)].values[0])
+    # Create a new dataframe with the population data
+    df_population = pd.DataFrame({'Year': years, 'Population': population})
+    df_population['Year-Week'] = pd.to_datetime(df_population['Year'], format='%Y')
+    # Create a Year-Week column
+
+    return df_population
