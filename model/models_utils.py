@@ -11,8 +11,8 @@ def prepare_dataframe(data_, features_lag, features_addtl, target, date_col, n_a
 
 
     # Define lags
-    env_lags = [1,2,3,4]   #2-week lag for environment features
-    cases_lag = range(n_ahead, 12)  # 1 to 11 week lags for target variable
+    env_lags = range(1,13)   #12-week lag for environment features
+    cases_lag = range(n_ahead, n_ahead+12)  # 1 to 11 week lags for target variable
 
     # Create lagged features for environment and target variables
     for lag in env_lags:

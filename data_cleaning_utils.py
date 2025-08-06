@@ -7,7 +7,7 @@ def get_merged_df(municipal_name):
     #drop columns with nan
     municipal_df.dropna(axis=1, inplace=True)
     # create a Year-Week column
-    municipal_df['Year-Week'] = municipal_df['Year'].astype(int).astype(str) + '-' + municipal_df['Week'].astype(int).astype(str) + '-1'
+    municipal_df['Year-Week'] = municipal_df['Year'].astype(int).astype(str) + '-' + municipal_df['Week'].astype(int).astype(str) + '-0'
     municipal_df['Year-Week'] = pd.to_datetime(municipal_df['Year-Week'], format='%Y-%W-%w')
     print(municipal_df.head())
     # merge weather_df and municipal_df
